@@ -27,5 +27,5 @@ etc.
 ```
 -Run the LeNet experiment using : 
 ```bash
-python trainer.py --datapath data/multi_fashion_and_mnist.pickle 
+python trainer.py --datapath data/multi_mnist.pickle 
 ```    
