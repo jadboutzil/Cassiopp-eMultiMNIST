@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
+from torch.nn.functional import cosine_similarity
 from tqdm import trange
 
 from .data import Dataset 
@@ -145,7 +146,11 @@ def train(
     min_angle = 0.1
     max_angle = np.pi / 2 - 0.1
     test_rays = circle_points(n_rays, min_angle=min_angle, max_angle=max_angle)
-
+    
+    # Initialize storage for loss tracking and cosine similarities
+    task1_losses = []
+    task2_losses = []
+    cosine_similarities = []
     # ----------
     # Train loop
     # ----------
@@ -156,6 +161,9 @@ def train(
     test_results = dict()
 
     for epoch in epoch_iter:
+        epoch_task1_loss = 0
+        epoch_task2_loss = 0
+        num_batches = 0
 
         for i, batch in enumerate(train_loader):
             hnet.train()
@@ -181,6 +189,23 @@ def train(
             l2 = loss2(logit2, ys[:, 1])
             losses = torch.stack((l1, l2))
 
+            # Record losses for statistical analysis
+            epoch_task1_loss += l1.item()
+            epoch_task2_loss += l2.item()
+            num_batches += 1
+
+            # Prepare gradient vectors for cosine similarity calculation
+            optimizer.zero_grad()
+            l1.backward(retain_graph=True)
+            grad1 = [p.grad.clone() for p in net.parameters() if p.grad is not None]
+            optimizer.zero_grad()
+            l2.backward()
+            grad2 = [p.grad.clone() for p in net.parameters() if p.grad is not None]
+
+            # Compute cosine similarity
+            cos_sim = sum(cosine_similarity(g1, g2) for g1, g2 in zip(grad1, grad2)) / len(grad1)
+            cosine_similarities.append(cos_sim.item())
+
             ray = ray.squeeze(0)
             loss = solver(losses, ray, list(hnet.parameters()))
 
@@ -192,6 +217,10 @@ def train(
             )
 
             optimizer.step()
+        
+        # Calculate and store average losses for the epoch
+        task1_losses.append(epoch_task1_loss / num_batches)
+        task2_losses.append(epoch_task2_loss / num_batches)
 
         if (epoch + 1) % eval_every == 0:
             last_eval = epoch
@@ -236,7 +265,12 @@ def train(
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
+   # Save losses and cosine similarities for further analysis
+    with open(Path(out_dir) / "task_losses.json", "w") as file:
+        json.dump({"task1": task1_losses, "task2": task2_losses}, file)
+    with open(Path(out_dir) / "cosine_similarities.json", "w") as file:
+        json.dump(cosine_similarities, file)
+        
     with open(Path(out_dir) / "val_results.json", "w") as file:
         json.dump(val_results, file)
     with open(Path(out_dir) / "test_results.json", "w") as file:
